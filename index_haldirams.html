@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Logic x Haldirams | Performance Dashboard</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root {
+    --orange: #E8601A;
+    --orange-light: #f97316;
+    --orange-dim: rgba(232,96,26,0.15);
+    --bg: #0d0d0d;
+    --surface: #161616;
+    --surface2: #1f1f1f;
+    --border: #2a2a2a;
+    --text: #f0f0f0;
+    --muted: #6b7280;
+    --muted2: #9ca3af;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+
+  /* HEADER */
+  header {
+    display: flex; align-items: center; gap: 16px;
+    padding: 18px 32px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    position: sticky; top: 0; z-index: 100;
+  }
+  .logo-wrap { display: flex; align-items: center; gap: 10px; }
+  .logo-img { height: 36px; width: auto; object-fit: contain; }
+  .logo-divider { width: 1px; height: 28px; background: var(--border); }
+  .header-title { font-size: 0.95rem; font-weight: 600; color: var(--text); letter-spacing: -.01em; }
+  .header-sub { font-size: 0.72rem; color: var(--muted); margin-top: 2px; }
+  .header-right { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+  .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex-shrink: 0; transition: background .4s; }
+  .live-dot.live { background: #22c55e; box-shadow: 0 0 6px #22c55e88; }
+  #updated { font-size: 0.72rem; color: var(--muted); }
+  .refresh-btn {
+    font-size: 0.72rem; font-weight: 500; color: var(--orange);
+    background: var(--orange-dim); border: 1px solid var(--orange);
+    border-radius: 6px; padding: 5px 12px; cursor: pointer; transition: all .15s;
+  }
+  .refresh-btn:hover { background: var(--orange); color: #fff; }
+
+  /* TABS */
+  .tabs-wrap { background: var(--surface); border-bottom: 1px solid var(--border); padding: 0 32px; overflow-x: auto; }
+  .tabs { display: flex; gap: 2px; }
+  .tab {
+    padding: 14px 20px; cursor: pointer; font-size: 0.82rem; font-weight: 500;
+    color: var(--muted); border-bottom: 2px solid transparent;
+    white-space: nowrap; transition: all .15s;
+  }
+  .tab:hover { color: var(--text); }
+  .tab.active { color: var(--orange); border-bottom-color: var(--orange); }
+
+  /* CONTENT */
+  #content { padding: 28px 32px; max-width: 1400px; margin: 0 auto; }
+
+  /* LOADING */
+  .loading { display: flex; align-items: center; justify-content: center; height: 220px; gap: 12px; color: var(--muted); font-size: 0.875rem; }
+  .spinner { width: 20px; height: 20px; border: 2px solid var(--border); border-top-color: var(--orange); border-radius: 50%; animation: spin .7s linear infinite; flex-shrink: 0; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .error-box { background: #2d1b1b; border: 1px solid #7f1d1d; border-radius: 10px; padding: 16px 20px; color: #fca5a5; font-size: 0.85rem; }
+  .empty { padding: 48px; text-align: center; color: var(--muted); font-size: 0.875rem; }
+
+  /* SECTION LABEL */
+  .section-label { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); margin-bottom: 14px; }
+
+  /* STAT CARDS */
+  .stats-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 14px; margin-bottom: 32px; }
+  .stat-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 18px 20px; transition: border-color .2s;
+  }
+  .stat-card:hover { border-color: var(--orange); }
+  .stat-card.primary { border-color: var(--orange); background: var(--orange-dim); }
+  .stat-label { font-size: 0.7rem; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 10px; }
+  .stat-value { font-size: 1.9rem; font-weight: 700; color: var(--text); line-height: 1; }
+  .stat-card.primary .stat-value { color: var(--orange-light); }
+  .stat-meta { font-size: 0.7rem; color: var(--muted); margin-top: 8px; }
+
+  /* CHARTS */
+  .charts-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 18px; margin-bottom: 32px; }
+  .chart-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+  .chart-title { font-size: 0.78rem; font-weight: 600; color: var(--muted2); margin-bottom: 16px; text-transform: uppercase; letter-spacing: .05em; }
+  .chart-wrap { position: relative; height: 200px; }
+
+  /* TABLE */
+  .table-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+  .table-topbar { display: flex; justify-content: space-between; align-items: center; padding: 14px 20px; border-bottom: 1px solid var(--border); }
+  .table-topbar span { font-size: 0.78rem; font-weight: 600; color: var(--muted2); text-transform: uppercase; letter-spacing: .05em; }
+  .row-count { background: var(--bg); border-radius: 20px; padding: 3px 10px; font-size: 0.7rem; color: var(--muted); border: 1px solid var(--border); }
+  .tscroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+  th { text-align: left; padding: 10px 16px; color: var(--muted); font-weight: 500; border-bottom: 1px solid var(--border); background: #111; font-size: 0.7rem; text-transform: uppercase; letter-spacing: .05em; white-space: nowrap; }
+  td { padding: 10px 16px; border-bottom: 1px solid #1a1a1a; color: var(--muted2); max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: var(--surface2); color: var(--text); }
+  .badge { display: inline-block; padding: 2px 9px; border-radius: 20px; font-size: 0.68rem; font-weight: 600; }
+  .b-green  { background: #052e16; color: #4ade80; border: 1px solid #14532d; }
+  .b-orange { background: #431407; color: #fb923c; border: 1px solid #9a3412; }
+  .b-yellow { background: #422006; color: #fbbf24; border: 1px solid #78350f; }
+  .b-gray   { background: #1c1c1c; color: #6b7280; border: 1px solid #374151; }
+  .b-blue   { background: #0c1a2e; color: #60a5fa; border: 1px solid #1d4ed8; }
+  .more-note { padding: 10px 18px; font-size: 0.7rem; color: var(--muted); border-top: 1px solid var(--border); }
+
+  /* ADS-specific metric highlight */
+  .ads-metrics { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px,1fr)); gap: 14px; margin-bottom: 32px; }
+
+  @media (max-width: 640px) {
+    header { padding: 14px 16px; flex-wrap: wrap; }
+    .tabs-wrap { padding: 0 16px; }
+    #content { padding: 16px; }
+    .charts-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo-wrap">
+    <img class="logo-img" src="https://static.wixstatic.com/media/11062b_75d0c677ff3542c395599772bf9870cdf000.png/v1/fill/w_160,h_84,al_c,q_85,usm_0.66_1.00_0.01,enc_avif,quality_auto/11062b_75d0c677ff3542c395599772bf9870cdf000.png" alt="Logic Agency" onerror="this.style.display='none'">
+    <div class="logo-divider"></div>
+    <div>
+      <div class="header-title">Logic × Haldirams</div>
+      <div class="header-sub">Outreach Performance Dashboard</div>
+    </div>
+  </div>
+  <div class="header-right">
+    <div class="live-dot" id="dot"></div>
+    <span id="updated">Loading…</span>
+    <button class="refresh-btn" onclick="forceRefresh()">↻ Refresh</button>
+  </div>
+</header>
+
+<div class="tabs-wrap">
+  <div class="tabs" id="tabs"></div>
+</div>
+
+<div id="content">
+  <div class="loading"><div class="spinner"></div> Fetching data from Airtable…</div>
+</div>
+
+<script>
+const PAT = 'patyhzZvqNxw1pYrd.46ebe01128a0080b93d4c82a6554f978c7b38c864cdd698c1f6c599d933b9954';
+const BASE = 'appYiIcXYaOM9A5uL';
+const TABLES = [
+  { label: 'CRM',                                id: 'tblri3BvVGwmh5KR6' },
+  { label: 'Weekly Stats — LinkedIn Outreach',   id: 'tblra79xhBe9IGImP' },
+  { label: 'Bimonthly — LinkedIn Content',       id: 'tblxhK6QY6ETK6e7F' },
+  { label: 'Bimonthly — LinkedIn Ads',           id: 'tbl1GlKd0RvfFAIoJ' },
+];
+
+// LinkedIn Ads: fields to SHOW (campaign metrics only)
+const ADS_FOCUS = ['impressions','clicks','cpm','cpc','ctr','spend','budget','conversions','cost per conversion','campaign name','status','start date','end date','objective'];
+
+const CACHE_KEY = 'lx_dashboard_cache';
+const CACHE_TTL = 24 * 60 * 60 * 1000; // 24h
+
+const allData = {}, allErrors = {};
+let activeIdx = 0;
+let charts = [];
+
+// ── Cache helpers ──────────────────────────────────────────
+function loadCache() {
+  try { return JSON.parse(localStorage.getItem(CACHE_KEY) || 'null'); } catch { return null; }
+}
+function saveCache(data) {
+  try { localStorage.setItem(CACHE_KEY, JSON.stringify({ ts: Date.now(), data })); } catch {}
+}
+
+// ── Airtable fetch ─────────────────────────────────────────
+async function fetchTable(id) {
+  let records = [], offset;
+  do {
+    const p = new URLSearchParams({ pageSize: 100 });
+    if (offset) p.set('offset', offset);
+    const r = await fetch(`https://api.airtable.com/v0/${BASE}/${id}?${p}`, {
+      headers: { Authorization: `Bearer ${PAT}` }
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status} ${r.statusText}`);
+    const j = await r.json();
+    records = records.concat(j.records || []);
+    offset = j.offset;
+  } while (offset);
+  return records;
+}
+
+// ── Format helpers ─────────────────────────────────────────
+function fmt(v) {
+  if (v == null || v === '') return '—';
+  if (typeof v === 'boolean') return v ? '✓' : '✗';
+  if (typeof v === 'number') return v % 1 === 0 ? v.toLocaleString() : v.toFixed(2);
+  if (Array.isArray(v)) return v.map(x => typeof x === 'object' ? (x.name || '') : x).join(', ');
+  if (typeof v === 'object') return v.url ? '🔗' : '';
+  const s = String(v);
+  return s.length > 70 ? s.slice(0, 67) + '…' : s;
+}
+function badgeCls(v) {
+  const s = String(v).toLowerCase();
+  if (['active','sent','booked','won','complete','yes','true','connected','replied'].some(x => s.includes(x))) return 'b-green';
+  if (['pending','progress','follow','review','in progress'].some(x => s.includes(x))) return 'b-yellow';
+  if (['paused','lost','no','false','declined','cancel','inactive'].some(x => s.includes(x))) return 'b-gray';
+  if (['new','prospect','lead'].some(x => s.includes(x))) return 'b-blue';
+  if (['running','live','launched'].some(x => s.includes(x))) return 'b-orange';
+  return null;
+}
+function isStatusLike(v) {
+  return typeof v === 'string' && v.length < 50 && /^[a-zA-Z\s\-\/()]+$/.test(v) && isNaN(v);
+}
+
+// ── Destroy old charts ─────────────────────────────────────
+function destroyCharts() {
+  charts.forEach(c => { try { c.destroy(); } catch {} });
+  charts = [];
+}
+
+// ── Render ─────────────────────────────────────────────────
+function renderTab(idx) {
+  activeIdx = idx;
+  destroyCharts();
+  document.querySelectorAll('.tab').forEach((t, i) => t.classList.toggle('active', i === idx));
+
+  const tbl = TABLES[idx];
+  const records = allData[idx];
+  const err = allErrors[idx];
+  const el = document.getElementById('content');
+
+  if (err) { el.innerHTML = `<div class="error-box">❌ ${err}</div>`; return; }
+  if (!records || !records.length) { el.innerHTML = `<div class="empty">No records found in "${tbl.label}"</div>`; return; }
+
+  const fieldSet = new Map();
+  records.forEach(r => Object.keys(r.fields || {}).forEach(k => fieldSet.set(k, true)));
+  let fields = [...fieldSet.keys()];
+
+  // For LinkedIn Ads tab, filter to campaign-relevant fields only
+  const isAds = idx === 3;
+  if (isAds) {
+    const focused = fields.filter(f => ADS_FOCUS.some(k => f.toLowerCase().includes(k)));
+    if (focused.length) fields = focused;
+  }
+
+  const numFields = fields.filter(f => records.some(r => typeof r.fields[f] === 'number'));
+  const visCols = fields.slice(0, 10);
+
+  // ── Stat cards ──
+  let statsHtml = '';
+  if (numFields.length) {
+    statsHtml = `<div class="section-label">Summary</div><div class="stats-grid">` +
+      numFields.slice(0, 8).map((f, i) => {
+        const vals = records.filter(r => typeof r.fields[f] === 'number').map(r => r.fields[f]);
+        const total = vals.reduce((a, b) => a + b, 0);
+        const avg = vals.length ? total / vals.length : 0;
+        const disp = total % 1 === 0 ? total.toLocaleString() : total.toFixed(2);
+        return `<div class="stat-card${i === 0 ? ' primary' : ''}">
+          <div class="stat-label">${f}</div>
+          <div class="stat-value">${disp}</div>
+          <div class="stat-meta">avg ${avg % 1 === 0 ? avg.toLocaleString() : avg.toFixed(2)} · ${vals.length} entries</div>
+        </div>`;
+      }).join('') + `</div>`;
+  }
+
+  // ── Charts ──
+  let chartsHtml = '';
+  const chartFields = numFields.slice(0, 4);
+  // Find a label field (first string field)
+  const labelField = fields.find(f => records.some(r => typeof r.fields[f] === 'string' && r.fields[f]));
+
+  if (chartFields.length) {
+    chartsHtml = `<div class="section-label">Charts</div><div class="charts-grid">` +
+      chartFields.map((f, ci) => `
+        <div class="chart-card">
+          <div class="chart-title">${f}</div>
+          <div class="chart-wrap"><canvas id="chart_${ci}"></canvas></div>
+        </div>`).join('') + `</div>`;
+  }
+
+  // ── Table ──
+  const ths = visCols.map(f => `<th>${f}</th>`).join('');
+  const trs = records.slice(0, 150).map(r => {
+    const tds = visCols.map(f => {
+      const v = r.fields[f];
+      const d = fmt(v);
+      if (d !== '—' && isStatusLike(v)) {
+        const cls = badgeCls(v);
+        if (cls) return `<td><span class="badge ${cls}">${d}</span></td>`;
+      }
+      return `<td>${d}</td>`;
+    }).join('');
+    return `<tr>${tds}</tr>`;
+  }).join('');
+
+  el.innerHTML = statsHtml + chartsHtml + `
+    <div class="section-label">Records</div>
+    <div class="table-card">
+      <div class="table-topbar">
+        <span>All Records</span>
+        <span class="row-count">${records.length} rows</span>
+      </div>
+      <div class="tscroll">
+        <table><thead><tr>${ths}</tr></thead><tbody>${trs}</tbody></table>
+      </div>
+      ${records.length > 150 ? `<div class="more-note">Showing first 150 of ${records.length} records</div>` : ''}
+    </div>`;
+
+  // ── Draw charts ──
+  const orange = '#E8601A';
+  const colors = ['#E8601A','#f97316','#fb923c','#fed7aa'];
+  requestAnimationFrame(() => {
+    chartFields.forEach((f, ci) => {
+      const canvas = document.getElementById(`chart_${ci}`);
+      if (!canvas) return;
+      const vals = records.slice(0, 12).map(r => typeof r.fields[f] === 'number' ? r.fields[f] : 0);
+      const labels = records.slice(0, 12).map((r, i) => {
+        if (labelField && r.fields[labelField]) return String(r.fields[labelField]).slice(0, 12);
+        return `#${i + 1}`;
+      });
+      const ctx = canvas.getContext('2d');
+      const type = ci === 0 ? 'bar' : ci === 1 ? 'line' : ci === 2 ? 'bar' : 'line';
+      const c = new Chart(ctx, {
+        type,
+        data: {
+          labels,
+          datasets: [{
+            label: f,
+            data: vals,
+            backgroundColor: colors[ci] + '55',
+            borderColor: colors[ci],
+            borderWidth: 2,
+            borderRadius: 6,
+            tension: 0.4,
+            fill: type === 'line',
+            pointBackgroundColor: colors[ci],
+            pointRadius: 4,
+          }]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { ticks: { color: '#6b7280', font: { size: 10 } }, grid: { color: '#1f1f1f' } },
+            y: { ticks: { color: '#6b7280', font: { size: 10 } }, grid: { color: '#1f1f1f' } }
+          }
+        }
+      });
+      charts.push(c);
+    });
+  });
+}
+
+// ── Init ───────────────────────────────────────────────────
+async function loadData(force = false) {
+  const el = document.getElementById('content');
+  el.innerHTML = `<div class="loading"><div class="spinner"></div> ${force ? 'Refreshing from Airtable…' : 'Fetching data…'}</div>`;
+  document.getElementById('dot').classList.remove('live');
+  document.getElementById('updated').textContent = 'Loading…';
+
+  // Check cache
+  if (!force) {
+    const cached = loadCache();
+    if (cached && Date.now() - cached.ts < 24 * 60 * 60 * 1000) {
+      cached.data.forEach((d, i) => { allData[i] = d.records; allErrors[i] = d.error; });
+      document.getElementById('dot').classList.add('live');
+      document.getElementById('updated').textContent = `Cached · ${new Date(cached.ts).toLocaleDateString()}`;
+      renderTab(activeIdx);
+      return;
+    }
+  }
+
+  await Promise.all(TABLES.map(async (t, i) => {
+    try { allData[i] = await fetchTable(t.id); allErrors[i] = null; }
+    catch (e) { allErrors[i] = e.message; allData[i] = []; }
+  }));
+
+  saveCache(TABLES.map((_, i) => ({ records: allData[i], error: allErrors[i] })));
+  document.getElementById('dot').classList.add('live');
+  document.getElementById('updated').textContent = `Updated ${new Date().toLocaleTimeString()}`;
+  renderTab(activeIdx);
+}
+
+function forceRefresh() { loadData(true); }
+
+// Build tabs
+document.getElementById('tabs').innerHTML = TABLES.map((t, i) =>
+  `<div class="tab${i === 0 ? ' active' : ''}" onclick="renderTab(${i})">${t.label}</div>`
+).join('');
+
+loadData();
+</script>
+</body>
+</html>
