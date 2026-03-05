@@ -108,8 +108,38 @@
   .b-blue   { background: #0c1a2e; color: #60a5fa; border: 1px solid #1d4ed8; }
   .more-note { padding: 10px 18px; font-size: 0.7rem; color: var(--muted); border-top: 1px solid var(--border); }
 
-  /* ADS-specific metric highlight */
-  .ads-metrics { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px,1fr)); gap: 14px; margin-bottom: 32px; }
+  /* DAILY BREAKOUT: date group header */
+  .date-group-row td {
+    background: var(--surface2);
+    color: var(--orange);
+    font-weight: 700;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  /* KPI bar for Daily Breakout */
+  .kpi-bar {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 12px;
+    margin-bottom: 28px;
+  }
+  .kpi-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+    transition: border-color .2s;
+  }
+  .kpi-card:hover { border-color: var(--orange); }
+  .kpi-card.hi { border-color: var(--orange); background: var(--orange-dim); }
+  .kpi-label { font-size: 0.65rem; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; margin-bottom: 7px; }
+  .kpi-value { font-size: 1.55rem; font-weight: 700; color: var(--text); line-height: 1; }
+  .kpi-card.hi .kpi-value { color: var(--orange-light); }
+  .kpi-sub { font-size: 0.65rem; color: var(--muted); margin-top: 6px; }
 
   @media (max-width: 640px) {
     header { padding: 14px 16px; flex-wrap: wrap; }
@@ -149,26 +179,31 @@
 </div>
 
 <script>
-const PAT = 'patyhzZvqNxw1pYrd.46ebe01128a0080b93d4c82a6554f978c7b38c864cdd698c1f6c599d933b9954';
+const PAT  = 'patyhzZvqNxw1pYrd.46ebe01128a0080b93d4c82a6554f978c7b38c864cdd698c1f6c599d933b9954';
 const BASE = 'appYiIcXYaOM9A5uL';
 const TABLES = [
-  { label: 'CRM',                                id: 'tblri3BvVGwmh5KR6' },
-  { label: 'Weekly Stats — LinkedIn Outreach',   id: 'tblra79xhBe9IGImP' },
-  { label: 'Bimonthly — LinkedIn Content',       id: 'tblxhK6QY6ETK6e7F' },
+  { label: 'Daily Breakout — LinkedIn Ads',      id: 'tblXDW2bbgAUCUHrJ' },
   { label: 'Bimonthly — LinkedIn Ads',           id: 'tbl1GlKd0RvfFAIoJ' },
+  { label: 'Bimonthly — LinkedIn Content',       id: 'tblxhK6QY6ETK6e7F' },
+  { label: 'Weekly Stats — LinkedIn Outreach',   id: 'tblra79xhBe9IGImP' },
+  { label: 'CRM',                                id: 'tblri3BvVGwmh5KR6' },
 ];
 
-// LinkedIn Ads: fields to SHOW (campaign metrics only)
-const ADS_FOCUS = ['impressions','clicks','cpm','cpc','ctr','spend','budget','conversions','cost per conversion','campaign name','status','start date','end date','objective'];
+// Fields to prioritise for LinkedIn Ads tabs
+const ADS_FOCUS = ['impressions','clicks','cpm','cpc','ctr','spend','budget','conversions',
+  'cost per conversion','campaign name','name','status','start date','end date','date','objective'];
 
-const CACHE_KEY = 'lx_dashboard_cache';
-const CACHE_TTL = 24 * 60 * 60 * 1000; // 24h
+// Fields to prioritise for Daily Breakout tab
+const DAILY_METRICS = ['impressions','clicks','spend','ctr','cpc','cpm','conversions','date','campaign','name'];
+
+const CACHE_KEY = 'lx_dashboard_cache_v2';
+const CACHE_TTL = 24 * 60 * 60 * 1000;
 
 const allData = {}, allErrors = {};
 let activeIdx = 0;
 let charts = [];
 
-// ── Cache helpers ──────────────────────────────────────────
+// ── Cache ──────────────────────────────────────────────────
 function loadCache() {
   try { return JSON.parse(localStorage.getItem(CACHE_KEY) || 'null'); } catch { return null; }
 }
@@ -203,6 +238,14 @@ function fmt(v) {
   const s = String(v);
   return s.length > 70 ? s.slice(0, 67) + '…' : s;
 }
+function fmtCurrency(v) {
+  if (v == null || isNaN(v)) return '—';
+  return '$' + Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function fmtPct(v) {
+  if (v == null || isNaN(v)) return '—';
+  return (Number(v) * (Number(v) <= 1 ? 100 : 1)).toFixed(2) + '%';
+}
 function badgeCls(v) {
   const s = String(v).toLowerCase();
   if (['active','sent','booked','won','complete','yes','true','connected','replied'].some(x => s.includes(x))) return 'b-green';
@@ -222,25 +265,419 @@ function destroyCharts() {
   charts = [];
 }
 
-// ── Render ─────────────────────────────────────────────────
-function renderTab(idx) {
-  activeIdx = idx;
-  destroyCharts();
-  document.querySelectorAll('.tab').forEach((t, i) => t.classList.toggle('active', i === idx));
+// ── DAILY BREAKOUT renderer ────────────────────────────────
+function renderDailyBreakout(records, el) {
+  if (!records.length) { el.innerHTML = `<div class="empty">No records found.</div>`; return; }
 
+  // Exact field names from LinkedIn Ads export
+  const DATE_F    = 'Start Date (in UTC)';
+  const CAMP_F    = 'Campaign Name';
+  const IMP_F     = 'Impressions';
+  const CLICK_F   = 'Clicks';
+  const SPEND_F   = 'Total Spent';
+  const CTR_F     = 'Click Through Rate';
+  const CPC_F     = 'Average CPC';
+  const CPM_F     = 'Average CPM';
+  const STATUS_F  = 'Campaign Status';
+  const OBJ_F     = 'Campaign Objective';
+
+  // Priority columns to show in the table (most useful first)
+  const TABLE_COLS = [
+    DATE_F, CAMP_F, STATUS_F, OBJ_F,
+    IMP_F, CLICK_F, SPEND_F, CTR_F, CPC_F, CPM_F,
+    'Reactions', 'Conversions', 'Cost per Conversion', 'Reach'
+  ].filter(f => records.some(r => r.fields[f] != null));
+
+  // Aggregate totals
+  const sum = f => records.reduce((a, r) => a + (Number(r.fields[f]) || 0), 0);
+
+  const totalImp     = sum(IMP_F);
+  const totalClick   = sum(CLICK_F) + sum('Other Clicks');  // Clicks + Other Clicks
+  const totalSpend   = sum(SPEND_F);
+  const avgCTR       = totalImp   ? (totalClick / totalImp) * 100 : 0;
+  const avgCPC       = totalClick ? totalSpend / totalClick : 0;
+  const avgCPM       = totalImp   ? (totalSpend / totalImp) * 1000 : 0;
+  const totalConv    = sum('Conversions');
+  const totalReach   = sum('Reach');
+  const totalEngaged = sum('Total Engagements');
+  const totalDoc25   = sum('Document Displays at 25%');
+  const totalDoc50   = sum('Document Displays at 50%');
+  const totalDoc75   = sum('Document Displays at 75%');
+  const totalDoc100  = sum('Document Displays at 100%');
+  const totalDocDisp = totalDoc25 + totalDoc50 + totalDoc75 + totalDoc100;
+
+  // Engagement Rate: impression-weighted average
+  const avgEngRate = (() => {
+    let weightedSum = 0, totalW = 0;
+    records.forEach(r => {
+      const raw  = String(r.fields['Engagement Rate'] || '').replace('%','').trim();
+      const rate = parseFloat(raw);
+      const imp  = Number(r.fields[IMP_F]) || 0;
+      if (!isNaN(rate) && imp) { weightedSum += rate * imp; totalW += imp; }
+    });
+    return totalW ? weightedSum / totalW : 0;
+  })();
+
+  // Dwell Time: average across records (format "M:SS" or raw seconds)
+  const avgDwell = (() => {
+    let total = 0, count = 0;
+    records.forEach(r => {
+      const raw   = String(r.fields['Average Dwell Time (in Seconds)'] || '');
+      const parts = raw.split(':');
+      if (parts.length === 2) {
+        const secs = parseInt(parts[0]) * 60 + parseInt(parts[1]);
+        if (!isNaN(secs)) { total += secs; count++; }
+      } else {
+        const secs = parseFloat(raw);
+        if (!isNaN(secs)) { total += secs; count++; }
+      }
+    });
+    return count ? total / count : 0;
+  })();
+  const avgDwellFmt = avgDwell ? `${Math.floor(avgDwell)}s` : '—';
+
+  const kpis = [
+    { label: 'Impressions',         value: totalImp.toLocaleString(),      hi: true  },
+    { label: 'Clicks (incl. Other)',value: totalClick.toLocaleString(),     hi: false },
+    { label: 'Total Spend',         value: fmtCurrency(totalSpend),         hi: false },
+    { label: 'Avg CTR',             value: avgCTR.toFixed(2) + '%',         hi: false },
+    { label: 'Avg CPC',             value: fmtCurrency(avgCPC),             hi: false },
+    { label: 'Avg CPM',             value: fmtCurrency(avgCPM),             hi: false },
+    { label: 'Total Engagements',   value: totalEngaged.toLocaleString(),   hi: false },
+    { label: 'Avg Engagement Rate', value: avgEngRate.toFixed(2) + '%',     hi: false },
+    { label: 'Doc Displays (all)',  value: totalDocDisp.toLocaleString(),   hi: false },
+    { label: 'Avg Dwell Time',      value: avgDwellFmt,                     hi: false },
+    { label: 'Conversions',         value: totalConv.toLocaleString(),      hi: false },
+    { label: 'Reach',               value: totalReach.toLocaleString(),     hi: false },
+  ].filter(k => k.value !== '$NaN' && k.value !== 'NaN%' && k.value !== '0' && k.value !== '—');
+
+  const kpiHtml = `
+    <div class="section-label">Campaign Totals</div>
+    <div class="kpi-bar">
+      ${kpis.map(k => `
+        <div class="kpi-card${k.hi ? ' hi' : ''}">
+          <div class="kpi-label">${k.label}</div>
+          <div class="kpi-value">${k.value}</div>
+        </div>`).join('')}
+    </div>`;
+
+  // Group by date for charts
+  const byDate = {};
+  records.forEach(r => {
+    const raw = r.fields[DATE_F] || '';
+    // Airtable may return ISO or M/D/YYYY — normalise to YYYY-MM-DD for sorting
+    let d = raw;
+    const mdY = String(raw).match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    if (mdY) d = `${mdY[3]}-${mdY[1].padStart(2,'0')}-${mdY[2].padStart(2,'0')}`;
+    else { const iso = String(raw).match(/^(\d{4}-\d{2}-\d{2})/); if (iso) d = iso[1]; }
+    if (!byDate[d]) byDate[d] = { imp: 0, click: 0, spend: 0 };
+    byDate[d].imp   += Number(r.fields[IMP_F])   || 0;
+    byDate[d].click += Number(r.fields[CLICK_F]) || 0;
+    byDate[d].spend += Number(r.fields[SPEND_F]) || 0;
+  });
+  const dates  = Object.keys(byDate).sort();
+  const labels = dates.map(d => { const p = d.split('-'); return `${p[1]}/${p[2]}`; });
+
+  const chartsHtml = `
+    <div class="section-label">Daily Trends</div>
+    <div class="charts-grid">
+      <div class="chart-card">
+        <div class="chart-title">Impressions per Day</div>
+        <div class="chart-wrap"><canvas id="chart_daily_imp"></canvas></div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-title">Clicks per Day</div>
+        <div class="chart-wrap"><canvas id="chart_daily_click"></canvas></div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-title">Spend per Day ($)</div>
+        <div class="chart-wrap"><canvas id="chart_daily_spend"></canvas></div>
+      </div>
+    </div>`;
+
+  // Table — sorted by date desc, grouped
+  const sorted = [...records].sort((a, b) => {
+    const norm = v => { const m = String(v||'').match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/); return m ? `${m[3]}-${m[1].padStart(2,'0')}-${m[2].padStart(2,'0')}` : String(v||''); };
+    return norm(b.fields[DATE_F]).localeCompare(norm(a.fields[DATE_F]));
+  });
+
+  const ths = TABLE_COLS.map(f => `<th>${f}</th>`).join('');
+  let tableRows = '', lastDate = null;
+  sorted.slice(0, 200).forEach(r => {
+    const raw = r.fields[DATE_F] || '';
+    const mdY = String(raw).match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    const d   = mdY ? `${mdY[3]}-${mdY[1].padStart(2,'0')}-${mdY[2].padStart(2,'0')}` : String(raw).slice(0,10);
+    if (d && d !== lastDate) {
+      tableRows += `<tr class="date-group-row"><td colspan="${TABLE_COLS.length}">${d}</td></tr>`;
+      lastDate = d;
+    }
+    const tds = TABLE_COLS.map(f => {
+      const v = r.fields[f];
+      const display = fmt(v);
+      if (display !== '—' && isStatusLike(v)) {
+        const cls = badgeCls(v);
+        if (cls) return `<td><span class="badge ${cls}">${display}</span></td>`;
+      }
+      return `<td>${display}</td>`;
+    }).join('');
+    tableRows += `<tr>${tds}</tr>`;
+  });
+
+  el.innerHTML = kpiHtml + chartsHtml + `
+    <div class="section-label">Records</div>
+    <div class="table-card">
+      <div class="table-topbar">
+        <span>Daily Breakdown</span>
+        <span class="row-count">${records.length} rows</span>
+      </div>
+      <div class="tscroll">
+        <table><thead><tr>${ths}</tr></thead><tbody>${tableRows}</tbody></table>
+      </div>
+      ${records.length > 200 ? `<div class="more-note">Showing first 200 of ${records.length} records</div>` : ''}
+    </div>`;
+
+  // Draw charts
+  const colors = ['#E8601A', '#f97316', '#fb923c'];
+  requestAnimationFrame(() => {
+    [
+      { id: 'chart_daily_imp',   key: 'imp',   color: colors[0] },
+      { id: 'chart_daily_click', key: 'click', color: colors[1] },
+      { id: 'chart_daily_spend', key: 'spend', color: colors[2] },
+    ].forEach(({ id, key, color }) => {
+      const canvas = document.getElementById(id);
+      if (!canvas) return;
+      const c = new Chart(canvas.getContext('2d'), {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [{
+            data: dates.map(d => byDate[d][key]),
+            backgroundColor: color + '33',
+            borderColor: color,
+            borderWidth: 2,
+            tension: 0.4,
+            fill: true,
+            pointBackgroundColor: color,
+            pointRadius: 4,
+          }]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { ticks: { color: '#6b7280', font: { size: 10 }, maxRotation: 45 }, grid: { color: '#1f1f1f' } },
+            y: { ticks: { color: '#6b7280', font: { size: 10 } }, grid: { color: '#1f1f1f' } }
+          }
+        }
+      });
+      charts.push(c);
+    });
+  });
+}
+
+// ── BIMONTHLY ADS renderer ────────────────────────────────
+function renderBimonthlyAds(records, el) {
+  if (!records.length) { el.innerHTML = `<div class="empty">No records found.</div>`; return; }
+
+  // Exact field names (same schema as Daily Breakout)
+  const IMP_F    = 'Impressions';
+  const CLICK_F  = 'Clicks';
+  const OTHER_F  = 'Other Clicks';
+  const SPEND_F  = 'Total Spent';
+  const CPM_F    = 'Average CPM';
+  const CPC_F    = 'Average CPC';
+  const ENG_F    = 'Total Engagements';
+  const ENGR_F   = 'Engagement Rate';
+  const REACH_F  = 'Reach';
+  const CONV_F   = 'Conversions';
+  const DATE_F   = 'Start Date (in UTC)';
+  const CAMP_F   = 'Campaign Name';
+  const STATUS_F = 'Campaign Status';
+  const OBJ_F    = 'Campaign Objective';
+
+  // Parse a value that may be a plain number, "$1.23", or "1.23%"
+  const parseNum = v => {
+    if (v == null) return 0;
+    return parseFloat(String(v).replace(/[$,%]/g, '')) || 0;
+  };
+  const sum = f => records.reduce((a, r) => a + parseNum(r.fields[f]), 0);
+
+  const totalImp   = sum(IMP_F);
+  const totalClick = sum(CLICK_F) + sum(OTHER_F);   // Clicks + Other Clicks
+  const totalSpend = sum(SPEND_F);
+  // Always calculate CTR from first principles — LinkedIn's exported CTR field is unreliable
+  const avgCTR     = totalImp   ? (totalClick / totalImp) * 100 : 0;
+  const avgCPC     = totalClick ? totalSpend / totalClick : 0;
+  const avgCPM     = sum(CPM_F) / Math.max(records.length, 1);  // avg of stored CPM values
+  const totalEng   = sum(ENG_F);
+  const totalConv  = sum(CONV_F);
+  const totalReach = sum(REACH_F);
+
+  // Engagement Rate: impression-weighted average of stored % values
+  const avgEngRate = (() => {
+    let weightedSum = 0, totalW = 0;
+    records.forEach(r => {
+      const rate = parseNum(r.fields[ENGR_F]);
+      const imp  = parseNum(r.fields[IMP_F]);
+      if (imp) { weightedSum += rate * imp; totalW += imp; }
+    });
+    return totalW ? weightedSum / totalW : 0;
+  })();
+
+  // Dwell Time: stored as raw seconds float in Bimonthly table
+  const avgDwell = (() => {
+    let total = 0, count = 0;
+    records.forEach(r => {
+      const raw = r.fields['Average Dwell Time (in Seconds)'];
+      if (raw == null || raw === '') return;
+      const s = String(raw);
+      // Could be "M:SS" format or plain float
+      const parts = s.split(':');
+      const secs = parts.length === 2
+        ? parseInt(parts[0]) * 60 + parseFloat(parts[1])
+        : parseFloat(s);
+      if (!isNaN(secs)) { total += secs; count++; }
+    });
+    return count ? total / count : 0;
+  })();
+  const avgDwellFmt = avgDwell ? `${avgDwell.toFixed(1)}s` : null;
+
+  // Doc displays
+  const totalDoc = ['Document Displays at 25%','Document Displays at 50%',
+                    'Document Displays at 75%','Document Displays at 100%']
+                    .reduce((a, f) => a + sum(f), 0);
+
+  const kpis = [
+    { label: 'Impressions',          value: totalImp   ? totalImp.toLocaleString()        : null, hi: true  },
+    { label: 'Clicks (incl. Other)', value: totalClick ? totalClick.toLocaleString()      : null, hi: true  },
+    { label: 'Total Spend',          value: totalSpend ? fmtCurrency(totalSpend)          : null, hi: false },
+    { label: 'Avg CTR',              value: totalImp   ? avgCTR.toFixed(2) + '%'          : null, hi: false },
+    { label: 'Avg CPC',              value: avgCPC     ? fmtCurrency(avgCPC)              : null, hi: false },
+    { label: 'Avg CPM',              value: avgCPM     ? fmtCurrency(avgCPM)              : null, hi: false },
+    { label: 'Total Engagements',    value: totalEng   ? totalEng.toLocaleString()        : null, hi: false },
+    { label: 'Avg Engagement Rate',  value: avgEngRate ? avgEngRate.toFixed(2) + '%'      : null, hi: false },
+    { label: 'Doc Displays (all)',   value: totalDoc   ? totalDoc.toLocaleString()        : null, hi: false },
+    { label: 'Avg Dwell Time',       value: avgDwellFmt,                                          hi: false },
+    { label: 'Conversions',          value: totalConv  ? totalConv.toLocaleString()       : null, hi: false },
+    { label: 'Reach',                value: totalReach ? totalReach.toLocaleString()      : null, hi: false },
+  ].filter(k => k.value !== null && k.value !== '$NaN' && k.value !== 'NaN%');
+
+  const kpiHtml = `
+    <div class="section-label">Campaign Summary</div>
+    <div class="kpi-bar">
+      ${kpis.map(k => `
+        <div class="kpi-card${k.hi ? ' hi' : ''}">
+          <div class="kpi-label">${k.label}</div>
+          <div class="kpi-value">${k.value}</div>
+        </div>`).join('')}
+    </div>`;
+
+  // Priority table columns — explicitly exclude budget
+  const TABLE_COLS = [
+    DATE_F, CAMP_F, STATUS_F, OBJ_F,
+    IMP_F, CLICK_F, OTHER_F, SPEND_F,
+    'Click Through Rate', CPM_F, CPC_F,
+    ENG_F, ENGR_F, REACH_F, CONV_F,
+    'Document Displays at 25%','Document Displays at 50%',
+    'Document Displays at 75%','Document Displays at 100%',
+    'Average Dwell Time (in Seconds)',
+  ].filter(f => records.some(r => r.fields[f] != null));
+
+  // Charts: Impressions, Clicks+Other, Spend — x-axis by date
+  const chartDefs = [
+    { label: 'Impressions',     fn: r => parseNum(r.fields[IMP_F]) },
+    { label: 'Clicks (incl. Other)', fn: r => parseNum(r.fields[CLICK_F]) + parseNum(r.fields[OTHER_F]) },
+    { label: 'Spend ($)',       fn: r => parseNum(r.fields[SPEND_F]) },
+  ];
+
+  function fmtDateLabel(v) {
+    if (!v) return '';
+    const mdy = String(v).match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    if (mdy) return `${mdy[1]}/${mdy[2]}`;
+    const iso = String(v).match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (iso) return `${iso[2]}/${iso[3]}`;
+    return String(v).slice(0, 10);
+  }
+
+  const chartsHtml = `
+    <div class="section-label">Charts</div>
+    <div class="charts-grid">
+      ${chartDefs.map((cd, ci) => `
+        <div class="chart-card">
+          <div class="chart-title">${cd.label}</div>
+          <div class="chart-wrap"><canvas id="bads_chart_${ci}"></canvas></div>
+        </div>`).join('')}
+    </div>`;
+
+  // Table
+  const ths = TABLE_COLS.map(f => `<th>${f}</th>`).join('');
+  const trs = records.slice(0, 150).map(r => {
+    const tds = TABLE_COLS.map(f => {
+      const v = r.fields[f];
+      const d = fmt(v);
+      if (d !== '—' && isStatusLike(v)) {
+        const cls = badgeCls(v);
+        if (cls) return `<td><span class="badge ${cls}">${d}</span></td>`;
+      }
+      return `<td>${d}</td>`;
+    }).join('');
+    return `<tr>${tds}</tr>`;
+  }).join('');
+
+  el.innerHTML = kpiHtml + chartsHtml + `
+    <div class="section-label">Records</div>
+    <div class="table-card">
+      <div class="table-topbar">
+        <span>All Records</span>
+        <span class="row-count">${records.length} rows</span>
+      </div>
+      <div class="tscroll">
+        <table><thead><tr>${ths}</tr></thead><tbody>${trs}</tbody></table>
+      </div>
+      ${records.length > 150 ? `<div class="more-note">Showing first 150 of ${records.length} records</div>` : ''}
+    </div>`;
+
+  // Draw charts
+  const colors = ['#E8601A','#f97316','#fb923c'];
+  requestAnimationFrame(() => {
+    chartDefs.forEach((cd, ci) => {
+      const canvas = document.getElementById(`bads_chart_${ci}`);
+      if (!canvas) return;
+      const labels = records.slice(0, 12).map(r => fmtDateLabel(r.fields[DATE_F]) || `Row ${ci+1}`);
+      const vals   = records.slice(0, 12).map(r => cd.fn(r));
+      const c = new Chart(canvas.getContext('2d'), {
+        type: 'bar',
+        data: {
+          labels,
+          datasets: [{
+            data: vals,
+            backgroundColor: colors[ci] + '55',
+            borderColor: colors[ci],
+            borderWidth: 2,
+            borderRadius: 6,
+          }]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { ticks: { color: '#6b7280', font: { size: 10 }, maxRotation: 45 }, grid: { color: '#1f1f1f' } },
+            y: { ticks: { color: '#6b7280', font: { size: 10 } }, grid: { color: '#1f1f1f' } }
+          }
+        }
+      });
+      charts.push(c);
+    });
+  });
+}
+
+// ── Generic tab renderer ───────────────────────────────────
+function renderGeneric(idx, records, el) {
   const tbl = TABLES[idx];
-  const records = allData[idx];
-  const err = allErrors[idx];
-  const el = document.getElementById('content');
-
-  if (err) { el.innerHTML = `<div class="error-box">❌ ${err}</div>`; return; }
-  if (!records || !records.length) { el.innerHTML = `<div class="empty">No records found in "${tbl.label}"</div>`; return; }
-
   const fieldSet = new Map();
   records.forEach(r => Object.keys(r.fields || {}).forEach(k => fieldSet.set(k, true)));
   let fields = [...fieldSet.keys()];
 
-  // For LinkedIn Ads tab, filter to campaign-relevant fields only
   const isAds = idx === 3;
   if (isAds) {
     const focused = fields.filter(f => ADS_FOCUS.some(k => f.toLowerCase().includes(k)));
@@ -248,17 +685,36 @@ function renderTab(idx) {
   }
 
   const numFields = fields.filter(f => records.some(r => typeof r.fields[f] === 'number'));
-  const visCols = fields.slice(0, 10);
+  const visCols   = fields.slice(0, 10);
 
-  // ── Stat cards ──
+  // Prefer a date/week field for chart x-axis labels; fall back to first string field
+  const DATE_HINTS = ['date', 'week', 'period', 'month', 'posted', 'published', 'start'];
+  const dateLabel  = fields.find(f => DATE_HINTS.some(h => f.toLowerCase().includes(h)) &&
+                       records.some(r => r.fields[f]));
+  const labelField = dateLabel ||
+                     fields.find(f => records.some(r => typeof r.fields[f] === 'string' && r.fields[f]));
+
+  function chartLabel(r, i) {
+    if (!labelField || !r.fields[labelField]) return `Row ${i + 1}`;
+    const v = String(r.fields[labelField]);
+    // If it looks like an ISO date (YYYY-MM-DD...) shorten to MM/DD or "Wk MM/DD"
+    const iso = v.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (iso) {
+      const label = `${iso[2]}/${iso[3]}`;
+      return dateLabel && dateLabel.toLowerCase().includes('week') ? `Wk ${label}` : label;
+    }
+    return v.slice(0, 14);
+  }
+
+  // Stat cards
   let statsHtml = '';
   if (numFields.length) {
     statsHtml = `<div class="section-label">Summary</div><div class="stats-grid">` +
       numFields.slice(0, 8).map((f, i) => {
         const vals = records.filter(r => typeof r.fields[f] === 'number').map(r => r.fields[f]);
         const total = vals.reduce((a, b) => a + b, 0);
-        const avg = vals.length ? total / vals.length : 0;
-        const disp = total % 1 === 0 ? total.toLocaleString() : total.toFixed(2);
+        const avg   = vals.length ? total / vals.length : 0;
+        const disp  = total % 1 === 0 ? total.toLocaleString() : total.toFixed(2);
         return `<div class="stat-card${i === 0 ? ' primary' : ''}">
           <div class="stat-label">${f}</div>
           <div class="stat-value">${disp}</div>
@@ -267,12 +723,9 @@ function renderTab(idx) {
       }).join('') + `</div>`;
   }
 
-  // ── Charts ──
+  // Charts
   let chartsHtml = '';
   const chartFields = numFields.slice(0, 4);
-  // Find a label field (first string field)
-  const labelField = fields.find(f => records.some(r => typeof r.fields[f] === 'string' && r.fields[f]));
-
   if (chartFields.length) {
     chartsHtml = `<div class="section-label">Charts</div><div class="charts-grid">` +
       chartFields.map((f, ci) => `
@@ -282,7 +735,7 @@ function renderTab(idx) {
         </div>`).join('') + `</div>`;
   }
 
-  // ── Table ──
+  // Table
   const ths = visCols.map(f => `<th>${f}</th>`).join('');
   const trs = records.slice(0, 150).map(r => {
     const tds = visCols.map(f => {
@@ -310,21 +763,16 @@ function renderTab(idx) {
       ${records.length > 150 ? `<div class="more-note">Showing first 150 of ${records.length} records</div>` : ''}
     </div>`;
 
-  // ── Draw charts ──
-  const orange = '#E8601A';
+  // Draw charts
   const colors = ['#E8601A','#f97316','#fb923c','#fed7aa'];
   requestAnimationFrame(() => {
     chartFields.forEach((f, ci) => {
       const canvas = document.getElementById(`chart_${ci}`);
       if (!canvas) return;
-      const vals = records.slice(0, 12).map(r => typeof r.fields[f] === 'number' ? r.fields[f] : 0);
-      const labels = records.slice(0, 12).map((r, i) => {
-        if (labelField && r.fields[labelField]) return String(r.fields[labelField]).slice(0, 12);
-        return `#${i + 1}`;
-      });
-      const ctx = canvas.getContext('2d');
+      const vals   = records.slice(0, 12).map(r => typeof r.fields[f] === 'number' ? r.fields[f] : 0);
+      const labels = records.slice(0, 12).map((r, i) => chartLabel(r, i));
       const type = ci === 0 ? 'bar' : ci === 1 ? 'line' : ci === 2 ? 'bar' : 'line';
-      const c = new Chart(ctx, {
+      const c = new Chart(canvas.getContext('2d'), {
         type,
         data: {
           labels,
@@ -345,7 +793,7 @@ function renderTab(idx) {
           responsive: true, maintainAspectRatio: false,
           plugins: { legend: { display: false } },
           scales: {
-            x: { ticks: { color: '#6b7280', font: { size: 10 } }, grid: { color: '#1f1f1f' } },
+            x: { ticks: { color: '#6b7280', font: { size: 10 }, maxRotation: 45 }, grid: { color: '#1f1f1f' } },
             y: { ticks: { color: '#6b7280', font: { size: 10 } }, grid: { color: '#1f1f1f' } }
           }
         }
@@ -355,6 +803,30 @@ function renderTab(idx) {
   });
 }
 
+// ── Main render dispatcher ─────────────────────────────────
+function renderTab(idx) {
+  activeIdx = idx;
+  destroyCharts();
+  document.querySelectorAll('.tab').forEach((t, i) => t.classList.toggle('active', i === idx));
+
+  const tbl     = TABLES[idx];
+  const records = allData[idx];
+  const err     = allErrors[idx];
+  const el      = document.getElementById('content');
+
+  if (err)                         { el.innerHTML = `<div class="error-box">❌ ${err}</div>`; return; }
+  if (!records || !records.length) { el.innerHTML = `<div class="empty">No records found in "${tbl.label}"</div>`; return; }
+
+  // Route to specialised renderers
+  if (idx === 0) {
+    renderDailyBreakout(records, el);
+  } else if (idx === 1) {
+    renderBimonthlyAds(records, el);
+  } else {
+    renderGeneric(idx, records, el);
+  }
+}
+
 // ── Init ───────────────────────────────────────────────────
 async function loadData(force = false) {
   const el = document.getElementById('content');
@@ -362,10 +834,9 @@ async function loadData(force = false) {
   document.getElementById('dot').classList.remove('live');
   document.getElementById('updated').textContent = 'Loading…';
 
-  // Check cache
   if (!force) {
     const cached = loadCache();
-    if (cached && Date.now() - cached.ts < 24 * 60 * 60 * 1000) {
+    if (cached && Date.now() - cached.ts < CACHE_TTL) {
       cached.data.forEach((d, i) => { allData[i] = d.records; allErrors[i] = d.error; });
       document.getElementById('dot').classList.add('live');
       document.getElementById('updated').textContent = `Cached · ${new Date(cached.ts).toLocaleDateString()}`;
