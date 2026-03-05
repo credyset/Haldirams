@@ -196,7 +196,7 @@ const ADS_FOCUS = ['impressions','clicks','cpm','cpc','ctr','spend','budget','co
 // Fields to prioritise for Daily Breakout tab
 const DAILY_METRICS = ['impressions','clicks','spend','ctr','cpc','cpm','conversions','date','campaign','name'];
 
-const CACHE_KEY = 'lx_dashboard_cache_v3';
+const CACHE_KEY = 'lx_dashboard_cache_v4';
 const CACHE_TTL = 24 * 60 * 60 * 1000;
 
 const allData = {}, allErrors = {};
@@ -842,6 +842,155 @@ function renderBimonthlyContent(records, el) {
   });
 }
 
+// ── WEEKLY OUTREACH renderer ──────────────────────────────
+function renderWeeklyOutreach(records, el) {
+  // Filter to rows that have actual data
+  const rows = records.filter(r => r.fields['Week'] || r.fields['Connection Invitations Sent']);
+  if (!rows.length) { el.innerHTML = `<div class="empty">No records found.</div>`; return; }
+
+  const WEEK_F    = 'Week';
+  const SENT_F    = 'Connection Invitations Sent';
+  const ACCR_F    = 'Acceptance Rate (%)';
+  const ACCD_F    = 'Accepted Invitations';
+  const MSG_F     = 'Messages Sent (To Connections)';
+  const RESP_F    = 'Response Rate';
+  const NEWRESP_F = 'New Responses';
+  const CAMP_F    = 'Campaign';
+  const NOTE_F    = 'Note';
+
+  const parseNum = v => parseFloat(String(v || '').replace(/[%,]/g, '')) || 0;
+  const sum = f => rows.reduce((a, r) => a + parseNum(r.fields[f]), 0);
+
+  const totalSent   = sum(SENT_F);
+  const totalAccd   = sum(ACCD_F);
+  const totalMsg    = sum(MSG_F);
+  const totalResp   = sum(NEWRESP_F);
+  // Acceptance rate = total accepted / total sent (correct calculation)
+  const accRate     = totalSent ? (totalAccd / totalSent) * 100 : 0;
+  // Response rate = total responses / total messages sent
+  const respRate    = totalMsg  ? (totalResp / totalMsg)  * 100 : 0;
+
+  const kpis = [
+    { label: 'Invites Sent',      value: totalSent ? totalSent.toLocaleString()  : null, hi: true  },
+    { label: 'Accepted',          value: totalAccd ? totalAccd.toLocaleString()  : null, hi: true  },
+    { label: 'Acceptance Rate',   value: accRate   ? accRate.toFixed(1) + '%'    : null, hi: false },
+    { label: 'Messages Sent',     value: totalMsg  ? totalMsg.toLocaleString()   : null, hi: false },
+    { label: 'New Responses',     value: totalResp ? totalResp.toLocaleString()  : null, hi: false },
+    { label: 'Response Rate',     value: respRate  ? respRate.toFixed(1) + '%'   : null, hi: false },
+  ].filter(k => k.value !== null);
+
+  const kpiHtml = `
+    <div class="section-label">Outreach Summary</div>
+    <div class="kpi-bar">
+      ${kpis.map(k => `
+        <div class="kpi-card${k.hi ? ' hi' : ''}">
+          <div class="kpi-label">${k.label}</div>
+          <div class="kpi-value">${k.value}</div>
+        </div>`).join('')}
+    </div>`;
+
+  // Format week date label: M/D/YYYY → "Wk M/D"
+  function fmtWeek(v) {
+    if (!v) return '';
+    const mdy = String(v).match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    if (mdy) return `Wk ${mdy[1]}/${mdy[2]}`;
+    const iso = String(v).match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (iso) return `Wk ${iso[2]}/${iso[3]}`;
+    return String(v).slice(0, 10);
+  }
+
+  // Sort rows by week ascending for charts
+  const sorted = [...rows].sort((a, b) => {
+    const norm = v => { const m = String(v||'').match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/); return m ? `${m[3]}-${m[1].padStart(2,'0')}-${m[2].padStart(2,'0')}` : String(v||''); };
+    return norm(a.fields[WEEK_F]).localeCompare(norm(b.fields[WEEK_F]));
+  });
+
+  const weekLabels = sorted.map(r => fmtWeek(r.fields[WEEK_F]));
+
+  const chartDefs = [
+    { label: 'Invites Sent',    fn: r => parseNum(r.fields[SENT_F])    },
+    { label: 'Accepted',        fn: r => parseNum(r.fields[ACCD_F])    },
+    { label: 'Acceptance Rate', fn: r => parseNum(r.fields[ACCR_F])    },
+    { label: 'Messages Sent',   fn: r => parseNum(r.fields[MSG_F])     },
+  ];
+
+  const chartsHtml = `
+    <div class="section-label">Weekly Trends</div>
+    <div class="charts-grid">
+      ${chartDefs.map((cd, ci) => `
+        <div class="chart-card">
+          <div class="chart-title">${cd.label}</div>
+          <div class="chart-wrap"><canvas id="wout_chart_${ci}"></canvas></div>
+        </div>`).join('')}
+    </div>`;
+
+  // Table
+  const TABLE_COLS = [WEEK_F, CAMP_F, SENT_F, ACCD_F, ACCR_F, MSG_F, NEWRESP_F, RESP_F, NOTE_F]
+    .filter(f => rows.some(r => r.fields[f] != null && r.fields[f] !== ''));
+
+  const ths = TABLE_COLS.map(f => `<th>${f}</th>`).join('');
+  const trs = sorted.slice().reverse().map(r => {  // newest first in table
+    const tds = TABLE_COLS.map(f => {
+      const v = r.fields[f];
+      const d = fmt(v);
+      if (d !== '—' && isStatusLike(v)) {
+        const cls = badgeCls(v);
+        if (cls) return `<td><span class="badge ${cls}">${d}</span></td>`;
+      }
+      return `<td>${d}</td>`;
+    }).join('');
+    return `<tr>${tds}</tr>`;
+  }).join('');
+
+  el.innerHTML = kpiHtml + chartsHtml + `
+    <div class="section-label">Records</div>
+    <div class="table-card">
+      <div class="table-topbar">
+        <span>Weekly Breakdown</span>
+        <span class="row-count">${rows.length} weeks</span>
+      </div>
+      <div class="tscroll">
+        <table><thead><tr>${ths}</tr></thead><tbody>${trs}</tbody></table>
+      </div>
+    </div>`;
+
+  // Draw charts
+  const colors = ['#E8601A','#f97316','#fb923c','#fed7aa'];
+  requestAnimationFrame(() => {
+    chartDefs.forEach((cd, ci) => {
+      const canvas = document.getElementById(`wout_chart_${ci}`);
+      if (!canvas) return;
+      const vals = sorted.map(r => cd.fn(r));
+      const c = new Chart(canvas.getContext('2d'), {
+        type: ci === 2 ? 'line' : 'bar',
+        data: {
+          labels: weekLabels,
+          datasets: [{
+            data: vals,
+            backgroundColor: colors[ci] + '55',
+            borderColor: colors[ci],
+            borderWidth: 2,
+            borderRadius: 6,
+            tension: 0.4,
+            fill: ci === 2,
+            pointBackgroundColor: colors[ci],
+            pointRadius: 4,
+          }]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { ticks: { color: '#6b7280', font: { size: 10 }, maxRotation: 45 }, grid: { color: '#1f1f1f' } },
+            y: { ticks: { color: '#6b7280', font: { size: 10 } }, grid: { color: '#1f1f1f' } }
+          }
+        }
+      });
+      charts.push(c);
+    });
+  });
+}
+
 // ── Generic tab renderer ───────────────────────────────────
 function renderGeneric(idx, records, el) {
   const tbl = TABLES[idx];
@@ -995,6 +1144,8 @@ function renderTab(idx) {
     renderBimonthlyAds(records, el);
   } else if (idx === 2) {
     renderBimonthlyContent(records, el);
+  } else if (idx === 3) {
+    renderWeeklyOutreach(records, el);
   } else {
     renderGeneric(idx, records, el);
   }
