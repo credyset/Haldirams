@@ -323,18 +323,17 @@ function renderDailyBreakout(records, el) {
     let total = 0, count = 0;
     records.forEach(r => {
       const raw   = String(r.fields['Average Dwell Time (in Seconds)'] || '');
+      if (!raw) return;
       const parts = raw.split(':');
-      if (parts.length === 2) {
-        const secs = parseInt(parts[0]) * 60 + parseInt(parts[1]);
-        if (!isNaN(secs)) { total += secs; count++; }
-      } else {
-        const secs = parseFloat(raw);
-        if (!isNaN(secs)) { total += secs; count++; }
-      }
+      // Format "M:SS" (e.g. "0:13") → seconds
+      const secs = parts.length === 2
+        ? parseInt(parts[0]) * 60 + parseFloat(parts[1])
+        : parseFloat(raw);
+      if (!isNaN(secs) && secs > 0) { total += secs; count++; }
     });
-    return count ? total / count : 0;
+    return count ? total / count : 0;  // true average, not sum
   })();
-  const avgDwellFmt = avgDwell ? `${Math.floor(avgDwell)}s` : '—';
+  const avgDwellFmt = avgDwell ? `${avgDwell.toFixed(1)}s` : '—';
 
   const kpis = [
     { label: 'Impressions',         value: totalImp.toLocaleString(),      hi: true  },
@@ -671,6 +670,178 @@ function renderBimonthlyAds(records, el) {
   });
 }
 
+// ── BIMONTHLY CONTENT renderer ────────────────────────────
+function renderBimonthlyContent(records, el) {
+  if (!records.length) { el.innerHTML = `<div class="empty">No records found.</div>`; return; }
+
+  // Exact field names from LinkedIn organic post analytics export
+  const IMP_F     = 'impressions';
+  const REACH_F   = 'members_reached';
+  const CLICK_F   = 'clicks_premium_custom_button_interactions';
+  const REACT_F   = 'reactions';
+  const COMM_F    = 'comments';
+  const REPO_F    = 'reposts';
+  const SAVES_F   = 'saves';
+  const SENDS_F   = 'sends';
+  const ENG_F     = 'engagements';
+  const ENGR_F    = 'engagement_rate';
+  const FOLL_F    = 'followers_gained_from_post';
+  const PROF_F    = 'profile_viewers_from_post';
+  const DATE_F    = 'post_date';
+  const URL_F     = 'post_url';
+
+  const parseNum = v => parseFloat(String(v || '').replace(/[,%]/g, '')) || 0;
+  const sum = f => records.reduce((a, r) => a + parseNum(r.fields[f]), 0);
+
+  const totalImp    = sum(IMP_F);
+  const totalReach  = sum(REACH_F);
+  const totalClick  = sum(CLICK_F);
+  const totalReact  = sum(REACT_F);
+  const totalComm   = sum(COMM_F);
+  const totalRepo   = sum(REPO_F);
+  const totalSaves  = sum(SAVES_F);
+  const totalSends  = sum(SENDS_F);
+  const totalEng    = sum(ENG_F);
+  const totalFoll   = sum(FOLL_F);
+  const totalProf   = sum(PROF_F);
+
+  // Engagement rate: impression-weighted average
+  const avgEngRate = (() => {
+    let weightedSum = 0, totalW = 0;
+    records.forEach(r => {
+      const rate = parseNum(r.fields[ENGR_F]) * 100; // stored as decimal e.g. 0.045
+      const imp  = parseNum(r.fields[IMP_F]);
+      if (imp) { weightedSum += rate * imp; totalW += imp; }
+    });
+    return totalW ? weightedSum / totalW : 0;
+  })();
+
+  const kpis = [
+    { label: 'Impressions',      value: totalImp   ? totalImp.toLocaleString()   : null, hi: true  },
+    { label: 'Members Reached',  value: totalReach ? totalReach.toLocaleString() : null, hi: true  },
+    { label: 'Button Clicks',    value: totalClick ? totalClick.toLocaleString() : null, hi: false },
+    { label: 'Reactions',        value: totalReact ? totalReact.toLocaleString() : null, hi: false },
+    { label: 'Comments',         value: totalComm  ? totalComm.toLocaleString()  : null, hi: false },
+    { label: 'Reposts',          value: totalRepo  ? totalRepo.toLocaleString()  : null, hi: false },
+    { label: 'Saves',            value: totalSaves ? totalSaves.toLocaleString() : null, hi: false },
+    { label: 'Sends',            value: totalSends ? totalSends.toLocaleString() : null, hi: false },
+    { label: 'Total Engagements',value: totalEng   ? totalEng.toLocaleString()   : null, hi: false },
+    { label: 'Avg Eng Rate',     value: avgEngRate ? avgEngRate.toFixed(2) + '%' : null, hi: false },
+    { label: 'Followers Gained', value: totalFoll  ? totalFoll.toLocaleString()  : null, hi: false },
+    { label: 'Profile Views',    value: totalProf  ? totalProf.toLocaleString()  : null, hi: false },
+  ].filter(k => k.value !== null);
+
+  const kpiHtml = `
+    <div class="section-label">Content Summary</div>
+    <div class="kpi-bar">
+      ${kpis.map(k => `
+        <div class="kpi-card${k.hi ? ' hi' : ''}">
+          <div class="kpi-label">${k.label}</div>
+          <div class="kpi-value">${k.value}</div>
+        </div>`).join('')}
+    </div>`;
+
+  // Charts — impressions, engagements, reactions by post date
+  const chartDefs = [
+    { label: 'Impressions',  fn: r => parseNum(r.fields[IMP_F])   },
+    { label: 'Engagements',  fn: r => parseNum(r.fields[ENG_F])   },
+    { label: 'Reactions',    fn: r => parseNum(r.fields[REACT_F]) },
+  ];
+
+  function fmtDateLabel(v) {
+    if (!v) return '';
+    // "March 4, 2026" → "3/4"
+    const months = {January:'1',February:'2',March:'3',April:'4',May:'5',June:'6',
+                    July:'7',August:'8',September:'9',October:'10',November:'11',December:'12'};
+    const m = String(v).match(/^(\w+)\s+(\d+),\s+\d+/);
+    if (m && months[m[1]]) return `${months[m[1]]}/${m[2]}`;
+    return String(v).slice(0, 8);
+  }
+
+  const chartsHtml = `
+    <div class="section-label">Charts</div>
+    <div class="charts-grid">
+      ${chartDefs.map((cd, ci) => `
+        <div class="chart-card">
+          <div class="chart-title">${cd.label}</div>
+          <div class="chart-wrap"><canvas id="bcont_chart_${ci}"></canvas></div>
+        </div>`).join('')}
+    </div>`;
+
+  // Table — priority columns, skip internal/top-breakdown fields
+  const TABLE_COLS = [
+    DATE_F, 'publish_time', URL_F,
+    IMP_F, REACH_F, CLICK_F, REACT_F, COMM_F, REPO_F,
+    SAVES_F, SENDS_F, ENG_F, ENGR_F, FOLL_F, PROF_F,
+  ].filter(f => records.some(r => r.fields[f] != null));
+
+  const ths = TABLE_COLS.map(f => `<th>${f}</th>`).join('');
+  // Sort by date descending
+  const sorted = [...records].sort((a, b) => {
+    const da = String(a.fields[DATE_F] || ''), db = String(b.fields[DATE_F] || '');
+    return db.localeCompare(da);
+  });
+  const trs = sorted.slice(0, 150).map(r => {
+    const tds = TABLE_COLS.map(f => {
+      const v = r.fields[f];
+      const d = fmt(v);
+      if (d !== '—' && isStatusLike(v)) {
+        const cls = badgeCls(v);
+        if (cls) return `<td><span class="badge ${cls}">${d}</span></td>`;
+      }
+      return `<td>${d}</td>`;
+    }).join('');
+    return `<tr>${tds}</tr>`;
+  }).join('');
+
+  el.innerHTML = kpiHtml + chartsHtml + `
+    <div class="section-label">Records</div>
+    <div class="table-card">
+      <div class="table-topbar">
+        <span>All Posts</span>
+        <span class="row-count">${records.length} posts</span>
+      </div>
+      <div class="tscroll">
+        <table><thead><tr>${ths}</tr></thead><tbody>${trs}</tbody></table>
+      </div>
+      ${records.length > 150 ? `<div class="more-note">Showing first 150 of ${records.length} records</div>` : ''}
+    </div>`;
+
+  // Draw charts
+  const colors = ['#E8601A','#f97316','#fb923c'];
+  requestAnimationFrame(() => {
+    chartDefs.forEach((cd, ci) => {
+      const canvas = document.getElementById(`bcont_chart_${ci}`);
+      if (!canvas) return;
+      const recs   = sorted.slice(0, 12);
+      const labels = recs.map(r => fmtDateLabel(r.fields[DATE_F]));
+      const vals   = recs.map(r => cd.fn(r));
+      const c = new Chart(canvas.getContext('2d'), {
+        type: 'bar',
+        data: {
+          labels,
+          datasets: [{
+            data: vals,
+            backgroundColor: colors[ci] + '55',
+            borderColor: colors[ci],
+            borderWidth: 2,
+            borderRadius: 6,
+          }]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { ticks: { color: '#6b7280', font: { size: 10 }, maxRotation: 45 }, grid: { color: '#1f1f1f' } },
+            y: { ticks: { color: '#6b7280', font: { size: 10 } }, grid: { color: '#1f1f1f' } }
+          }
+        }
+      });
+      charts.push(c);
+    });
+  });
+}
+
 // ── Generic tab renderer ───────────────────────────────────
 function renderGeneric(idx, records, el) {
   const tbl = TABLES[idx];
@@ -822,6 +993,8 @@ function renderTab(idx) {
     renderDailyBreakout(records, el);
   } else if (idx === 1) {
     renderBimonthlyAds(records, el);
+  } else if (idx === 2) {
+    renderBimonthlyContent(records, el);
   } else {
     renderGeneric(idx, records, el);
   }
